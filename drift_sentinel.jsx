@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 
 // ============================================================================
-// Drift Sentinel — v4
+// Drift Sentinel — v5
 // Lovable's voice and visual system, our scenario (F-04 approval-too-fast,
 // recovery flow, P0 dismiss confirmation, design notes as popovers).
+// v5: visual snapshots, source links, and design notes from peer critique.
 // ============================================================================
 
 // --- Design tokens ---------------------------------------------------------
@@ -118,6 +119,13 @@ const Icon = {
       <line x1="12" y1="8" x2="12.01" y2="8" />
     </svg>
   ),
+  externalLink: (p) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <polyline points="15 3 21 3 21 9" />
+      <line x1="10" y1="14" x2="21" y2="3" />
+    </svg>
+  ),
 };
 
 // --- Reusable bits ---------------------------------------------------------
@@ -176,6 +184,147 @@ const NoteMarker = ({ show, label, body }) => {
   );
 };
 
+// Source link with middle-truncation and tooltip
+const SourceLink = ({ path }) => {
+  if (!path) return null;
+  const display = (() => {
+    if (path.length <= 44) return path;
+    const lastSlash = path.lastIndexOf("/");
+    const tail = path.slice(lastSlash + 1);
+    return `src/.../${tail}`;
+  })();
+  return (
+    <a
+      href="#"
+      onClick={(e) => e.preventDefault()}
+      title={`${path}\n\nIn production this would link directly to the exact line in the codebase, the corresponding Figma frame, or the live URL.`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        padding: "4px 9px", fontSize: 12, fontFamily: MONO,
+        color: T.inkSoft, background: T.surfaceMuted,
+        border: `1px solid ${T.line}`, borderRadius: 6,
+        textDecoration: "none", cursor: "help",
+        maxWidth: 360, overflow: "hidden",
+        textOverflow: "ellipsis", whiteSpace: "nowrap",
+      }}
+    >
+      <Icon.externalLink width="11" height="11" style={{ color: T.inkMuted, flexShrink: 0 }} />
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{display}</span>
+    </a>
+  );
+};
+
+// Visual snapshot panel wrapper
+const SnapshotPanel = ({ side, children }) => {
+  const isObserved = side === "observed";
+  const accent = isObserved ? T.p1 : T.ok;
+  const accentBg = isObserved ? T.p1Bg : T.okBg;
+  const accentBorder = isObserved ? T.p1Border : T.okBorder;
+  const label = isObserved ? "Observed" : "Expected";
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, overflow: "hidden", background: T.surface }}>
+      <div style={{ padding: "6px 11px", fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: accent, background: accentBg, borderBottom: `1px solid ${accentBorder}`, fontFamily: MONO }}>
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+};
+
+// Color swatch with sample text
+const ColorSwatchSample = ({ color, background, sampleText }) => (
+  <div style={{ padding: 14, background, display: "flex", alignItems: "center", gap: 12 }}>
+    <div style={{ width: 36, height: 36, background: color, borderRadius: 6, border: `1px solid ${T.line}`, flexShrink: 0 }} />
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 14, fontWeight: 500, color, lineHeight: 1.2, marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {sampleText || "Aa"}
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 11, color: T.inkMuted, letterSpacing: 0.3 }}>{color}</div>
+    </div>
+  </div>
+);
+
+// Focus-ring sample for F-02
+const FocusRingSample = ({ withRing }) => (
+  <div style={{ padding: 18, background: T.surface, display: "flex", justifyContent: "center" }}>
+    <div style={{ padding: "9px 12px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 6, fontSize: 13, color: T.inkSoft, outline: withRing ? `2px solid #0F5DC2` : "none", outlineOffset: withRing ? 2 : 0, minWidth: 140 }}>
+      Agency name
+    </div>
+  </div>
+);
+
+// The actual snapshot renderer — picks the right visual per finding
+const DriftSnapshot = ({ f }) => {
+  if (f.id === "F-01") {
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <SnapshotPanel side="observed">
+          <div style={{ padding: 18, background: T.surface, display: "flex", justifyContent: "center" }}>
+            <div style={{ padding: "8px 16px", background: "#FED7AA", color: "#C2410C", borderRadius: 6, fontSize: 13.5, fontWeight: 600 }}>Review now</div>
+          </div>
+          <div style={{ padding: "8px 11px", fontFamily: MONO, fontSize: 11, color: T.inkMuted, borderTop: `1px solid ${T.lineSoft}`, background: T.surfaceMuted }}>3.1:1 — fails WCAG AA</div>
+        </SnapshotPanel>
+        <SnapshotPanel side="expected">
+          <div style={{ padding: 18, background: T.surface, display: "flex", justifyContent: "center" }}>
+            <div style={{ padding: "8px 16px", background: "#FED7AA", color: "#7C2D12", borderRadius: 6, fontSize: 13.5, fontWeight: 600 }}>Review now</div>
+          </div>
+          <div style={{ padding: "8px 11px", fontFamily: MONO, fontSize: 11, color: T.inkMuted, borderTop: `1px solid ${T.lineSoft}`, background: T.surfaceMuted }}>6.8:1 — passes WCAG AA</div>
+        </SnapshotPanel>
+      </div>
+    );
+  }
+  if (f.id === "F-02") {
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <SnapshotPanel side="observed">
+          <FocusRingSample withRing={false} />
+          <div style={{ padding: "8px 11px", fontFamily: MONO, fontSize: 11, color: T.inkMuted, borderTop: `1px solid ${T.lineSoft}`, background: T.surfaceMuted }}>outline: none on :focus</div>
+        </SnapshotPanel>
+        <SnapshotPanel side="expected">
+          <FocusRingSample withRing={true} />
+          <div style={{ padding: "8px 11px", fontFamily: MONO, fontSize: 11, color: T.inkMuted, borderTop: `1px solid ${T.lineSoft}`, background: T.surfaceMuted }}>ring/focus: 2px solid · 2px offset</div>
+        </SnapshotPanel>
+      </div>
+    );
+  }
+  if (f.id === "F-03") {
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <SnapshotPanel side="observed">
+          <div style={{ padding: 18, background: T.surface, display: "flex", justifyContent: "center" }}>
+            <div style={{ padding: "4px 12px", background: "#1F7AE0", color: "white", borderRadius: 999, fontSize: 12, fontWeight: 600 }}>In review</div>
+          </div>
+          <div style={{ padding: "8px 11px", fontFamily: MONO, fontSize: 11, color: T.inkMuted, borderTop: `1px solid ${T.lineSoft}`, background: T.surfaceMuted }}>#1F7AE0 — raw hex</div>
+        </SnapshotPanel>
+        <SnapshotPanel side="expected">
+          <div style={{ padding: 18, background: T.surface, display: "flex", justifyContent: "center" }}>
+            <div style={{ padding: "4px 12px", background: "#0F5DC2", color: "white", borderRadius: 999, fontSize: 12, fontWeight: 600 }}>In review</div>
+          </div>
+          <div style={{ padding: "8px 11px", fontFamily: MONO, fontSize: 11, color: T.inkMuted, borderTop: `1px solid ${T.lineSoft}`, background: T.surfaceMuted }}>#0F5DC2 — color/brand/primary</div>
+        </SnapshotPanel>
+      </div>
+    );
+  }
+  if (f.id === "F-04") {
+    return (
+      <div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <SnapshotPanel side="observed">
+            <ColorSwatchSample color="#0066B2" background="#FFFFFF" sampleText="Partner Directory" />
+          </SnapshotPanel>
+          <SnapshotPanel side="expected">
+            <ColorSwatchSample color="#0B5FFF" background="#FFFFFF" sampleText="Partner Directory" />
+          </SnapshotPanel>
+        </div>
+        <div style={{ marginTop: 10, padding: "9px 12px", fontSize: 12, color: T.warn, background: T.warnBg, border: `1px solid ${T.warnBorder}`, borderRadius: 8, fontStyle: "italic", lineHeight: 1.5 }}>
+          Shown as drift, but may be intentional partner branding — the agent cannot tell from code alone.
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
 // --- Mock data: the overnight scenario -------------------------------------
 const SCENARIO = {
   ran: { start: "02:14", end: "03:47", date: "tonight" },
@@ -199,6 +348,7 @@ const INITIAL_FINDINGS = [
     fix: "Swap text color to color/warn/ink-strong. No background change.",
     foundAt: "tonight",
     status: "open",
+    sourcePath: "src/components/diagnostic/RiskSummaryPanel.jsx:142",
   },
   {
     id: "F-02",
@@ -214,6 +364,7 @@ const INITIAL_FINDINGS = [
     fix: "Apply ring/focus token to the input :focus state.",
     foundAt: "tonight",
     status: "open",
+    sourcePath: "src/pages/onboarding/Step2AgencyDetails.jsx:78",
   },
   {
     id: "F-03",
@@ -229,6 +380,7 @@ const INITIAL_FINDINGS = [
     fix: "Swap inline hex for the color/brand/primary token.",
     foundAt: "tonight",
     status: "open",
+    sourcePath: "src/components/reports/StatusPill.jsx:23",
   },
   {
     id: "F-04",
@@ -244,6 +396,7 @@ const INITIAL_FINDINGS = [
     fix: "Swap to color/brand/secondary token. ⚠ Verify this is not partner branding before approving.",
     foundAt: "tonight",
     status: "open",
+    sourcePath: "src/components/partner/SectionBanner.jsx:17",
   },
 ];
 
@@ -409,7 +562,7 @@ export default function DriftSentinel() {
   // --- Layout --------------------------------------------------------------
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.ink, fontFamily: FONT, display: "flex", fontSize: 14, WebkitFontSmoothing: "antialiased" }}>
-      <Sidebar view={view} setView={setView} stagedCount={stagedCount} openCount={openCount} archiveCount={archive.length} />
+      <Sidebar view={view} setView={setView} stagedCount={stagedCount} openCount={openCount} archiveCount={archive.length} showNotes={showNotes} />
 
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <TopBar showNotes={showNotes} setShowNotes={setShowNotes} />
@@ -448,7 +601,7 @@ export default function DriftSentinel() {
 }
 
 // --- Sidebar ---------------------------------------------------------------
-function Sidebar({ view, setView, stagedCount, openCount, archiveCount }) {
+function Sidebar({ view, setView, stagedCount, openCount, archiveCount, showNotes }) {
   const items = [
     { id: "audit", icon: Icon.doc, label: "Audit report", count: openCount + stagedCount },
     { id: "digest", icon: Icon.moon, label: "While you were away" },
@@ -515,6 +668,13 @@ function Sidebar({ view, setView, stagedCount, openCount, archiveCount }) {
         <div style={{ marginTop: 10, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, padding: "4px 9px", background: T.okBg, color: T.ok, border: `1px solid ${T.okBorder}`, borderRadius: 999 }}>
           <span style={{ width: 6, height: 6, borderRadius: 999, background: T.ok }} />
           Idle — next run {SCENARIO.nextRun} UTC
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <NoteMarker
+            show={showNotes}
+            label="Ad hoc audits — peer critique (Michael)"
+            body="Today the agent runs on a fixed nightly cadence. In a longer-term version, the user could trigger an audit on demand — pointing the agent at a specific Figma file, a code branch before merge, or a single page she suspects has drifted — without waiting for the next scheduled run. The same trust mechanisms (staging, low-confidence flags, release-as-PR) would still apply."
+          />
         </div>
       </div>
     </aside>
@@ -776,6 +936,30 @@ function FindingCard({ f, expanded, setExpanded, approveFix, dismiss, markIntent
             </div>
           )}
 
+          {/* Source row */}
+          <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: T.inkMuted, textTransform: "uppercase", letterSpacing: 0.6 }}>Source</span>
+            <SourceLink path={f.sourcePath} />
+            <NoteMarker
+              show={showNotes}
+              label="Source linking — peer critique (Michael)"
+              body="In production, every finding would link directly to the exact line of code, the corresponding Figma frame, or the live URL — so the user can jump straight to the origin instead of hunting for it. In this prototype the link is non-functional; hover shows what it would do."
+            />
+          </div>
+
+          {/* Visual snapshot of the drift */}
+          <div style={{ marginTop: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkMuted, textTransform: "uppercase", letterSpacing: 0.6 }}>Visual evidence</div>
+              <NoteMarker
+                show={showNotes}
+                label="Visual snapshots — peer critique (Michael)"
+                body="Drift is a visual problem, so the audit shows it visually — observed on the left, expected on the right. Text values are still shown below for precision, but the swatches let a designer recognize the issue at a glance instead of parsing hex codes."
+              />
+            </div>
+            <DriftSnapshot f={f} />
+          </div>
+
           {/* Detail grid */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginTop: 18 }}>
             <DetailBlock label="What drifted" body={f.drifted} />
@@ -889,6 +1073,13 @@ function DigestView({ findings, archive, showNotes, setView, stagedCount }) {
         kicker={<><Icon.moon width="13" height="13" /> While you were away</>}
         title="A short brief from your overnight agent"
         subtitle={`${SCENARIO.ran.date}, ${SCENARIO.ran.start} – ${SCENARIO.ran.end} UTC`}
+        titleNote={
+          <NoteMarker
+            show={showNotes}
+            label="Cadenced educational report — peer critique (Michael)"
+            body="In a longer-term version, this digest would also include a slower-rhythm summary (weekly or monthly) that surfaces patterns over time — recurring drift sources, files where drift concentrates, and short educational notes for the developers who keep producing it. The goal: shift from catching drift to preventing it. The same trust mechanisms apply; only the cadence changes."
+          />
+        }
       />
 
       <div style={{ marginTop: 28, padding: "20px 22px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 12 }}>
@@ -1003,6 +1194,13 @@ function BoundariesView({ autonomy, setAutonomy, showNotes }) {
         kicker={<><Icon.lock width="13" height="13" /> Agent boundaries</>}
         title="What the agent can — and can never — do"
         subtitle="You set the standards (the design tokens) and the constraints. The agent works inside them."
+        titleNote={
+          <NoteMarker
+            show={showNotes}
+            label="Earlier-in-workflow integration — peer critique (Anna)"
+            body="Today the agent runs nightly against the shipped product — it catches drift after it's there. A natural extension is to run the same checks earlier: on a pull request before merge, on a Figma file before handoff, or inside the design tool itself. The same trust architecture (boundaries, staging, low-confidence flagging, release approval) would carry over to those earlier stages."
+          />
+        }
       />
 
       <div style={{ marginTop: 28, padding: "24px 26px", background: T.navy, borderRadius: 12, color: "#E5E7EB" }}>
