@@ -329,9 +329,22 @@ const DriftSnapshot = ({ f }) => {
 const SCENARIO = {
   ran: { start: "02:14", end: "03:47", date: "tonight" },
   nextRun: "02:00",
-  scanned: { components: 1284, routes: 47, tokenBundle: "v4.12.0" },
+  scanned: { components: 1284, routes: 47, routesTotal: 49, tokenBundle: "v4.12.0" },
+  skipped: [
+    { route: "/internal/admin", reason: "auth required" },
+    { route: "/billing/invoice/:id", reason: "auth required" },
+  ],
   counts: { P0: 2, P1: 1, P2: 1, lowConfidence: 1 },
 };
+
+// Exemptions already on file — findings the user previously marked "Allowed exception".
+// In a real product this would come from a persistent store; here it's seeded to make
+// the suppression layer legible.
+const SEEDED_EXEMPTIONS = [
+  { id: "E-118", title: "Partner-mandated orange on Acme banner", category: "Color", markedAt: "3 weeks ago" },
+  { id: "E-104", title: "Legacy modal uses pre-token spacing", category: "Spacing", markedAt: "2 months ago" },
+  { id: "E-091", title: "Marketing CTA font weight outside scale", category: "Typography", markedAt: "2 months ago" },
+];
 
 const INITIAL_FINDINGS = [
   {
@@ -349,6 +362,7 @@ const INITIAL_FINDINGS = [
     foundAt: "tonight",
     status: "open",
     sourcePath: "src/components/diagnostic/RiskSummaryPanel.jsx:142",
+    reviewKind: "trivial",
   },
   {
     id: "F-02",
@@ -365,6 +379,7 @@ const INITIAL_FINDINGS = [
     foundAt: "tonight",
     status: "open",
     sourcePath: "src/pages/onboarding/Step2AgencyDetails.jsx:78",
+    reviewKind: "trivial",
   },
   {
     id: "F-03",
@@ -381,6 +396,7 @@ const INITIAL_FINDINGS = [
     foundAt: "tonight",
     status: "open",
     sourcePath: "src/components/reports/StatusPill.jsx:23",
+    reviewKind: "trivial",
   },
   {
     id: "F-04",
@@ -397,6 +413,7 @@ const INITIAL_FINDINGS = [
     foundAt: "tonight",
     status: "open",
     sourcePath: "src/components/partner/SectionBanner.jsx:17",
+    reviewKind: "judgment",
   },
 ];
 
@@ -407,7 +424,11 @@ export default function DriftSentinel() {
   const [archive, setArchive] = useState([]); // dismissed / intentional / released findings
   const [expandedId, setExpandedId] = useState("F-04");
   const [confirmingDismissId, setConfirmingDismissId] = useState(null);
+  const [confirmingIntentionalId, setConfirmingIntentionalId] = useState(null);
   const [confirmingRelease, setConfirmingRelease] = useState(false);
+  const [exemptionsOpen, setExemptionsOpen] = useState(false);
+  const [showDemoBanner, setShowDemoBanner] = useState(true);
+  const [exemptions, setExemptions] = useState(SEEDED_EXEMPTIONS);
   const [toast, setToast] = useState(null);
   const [showNotes, setShowNotes] = useState(true);
   const [prCounter, setPrCounter] = useState(247); // next PR number
@@ -475,7 +496,16 @@ export default function DriftSentinel() {
   };
 
   const markIntentional = (id) => {
-    moveToArchive(id, "intentional");
+    // Marking intentional permanently suppresses re-flagging — gate behind confirmation
+    // for every severity, not just P0. The asymmetry matters: Dismiss re-checks next run,
+    // Intentional doesn't, so the higher-friction one should be the more dangerous action.
+    setConfirmingIntentionalId(id);
+  };
+
+  const confirmMarkIntentional = (reason) => {
+    const id = confirmingIntentionalId;
+    setConfirmingIntentionalId(null);
+    moveToArchive(id, "intentional", reason);
   };
 
   const moveToArchive = (id, archiveKind, reason) => {
@@ -571,6 +601,8 @@ export default function DriftSentinel() {
           {view === "audit" && (
             <AuditView
               findings={findings}
+              archive={archive}
+              exemptions={exemptions}
               expandedId={expandedId}
               setExpandedId={setExpandedId}
               approveFix={approveFix}
@@ -581,8 +613,11 @@ export default function DriftSentinel() {
               unstage={unstage}
               acknowledgeRecheck={acknowledgeRecheck}
               openRelease={() => setConfirmingRelease(true)}
+              openExemptions={() => setExemptionsOpen(true)}
               showNotes={showNotes}
               stagedCount={stagedCount}
+              showDemoBanner={showDemoBanner}
+              dismissDemoBanner={() => setShowDemoBanner(false)}
             />
           )}
           {view === "digest" && <DigestView findings={findings} archive={archive} showNotes={showNotes} setView={setView} stagedCount={stagedCount} />}
@@ -593,7 +628,11 @@ export default function DriftSentinel() {
 
       {confirmingDismissId && <DismissConfirmModal id={confirmingDismissId} onCancel={() => setConfirmingDismissId(null)} onConfirm={confirmDismiss} finding={findings.find((f) => f.id === confirmingDismissId)} />}
 
+      {confirmingIntentionalId && <IntentionalConfirmModal finding={findings.find((f) => f.id === confirmingIntentionalId)} onCancel={() => setConfirmingIntentionalId(null)} onConfirm={confirmMarkIntentional} />}
+
       {confirmingRelease && <ReleaseConfirmModal stagedFindings={findings.filter((f) => f.status === "staged")} prNumber={`DS-${prCounter}`} onCancel={() => setConfirmingRelease(false)} onConfirm={releaseStaged} />}
+
+      {exemptionsOpen && <ExemptionsModal exemptions={exemptions} archivedIntentional={archive.filter((f) => f.status === "intentional")} onClose={() => setExemptionsOpen(false)} />}
 
       {toast && <Toast toast={toast} pause={pauseToast} resume={resumeToast} dismiss={() => setToast(null)} />}
     </div>
@@ -698,7 +737,7 @@ function TopBar({ showNotes, setShowNotes }) {
 }
 
 // --- Audit view ------------------------------------------------------------
-function AuditView({ findings, expandedId, setExpandedId, approveFix, dismiss, markIntentional, decideLater, rollBack, unstage, acknowledgeRecheck, openRelease, showNotes, stagedCount }) {
+function AuditView({ findings, archive, exemptions, expandedId, setExpandedId, approveFix, dismiss, markIntentional, decideLater, rollBack, unstage, acknowledgeRecheck, openRelease, openExemptions, showNotes, stagedCount, showDemoBanner, dismissDemoBanner }) {
   const open = findings.filter((f) => f.status === "open" || f.status === "reviewed");
   const staged = findings.filter((f) => f.status === "staged");
 
@@ -708,8 +747,11 @@ function AuditView({ findings, expandedId, setExpandedId, approveFix, dismiss, m
     P2: open.filter((f) => f.severity === "P2").length,
   };
 
+  const intentionalCount = exemptions.length + archive.filter((f) => f.status === "intentional").length;
+
   return (
     <div>
+      {showDemoBanner && <DemoBanner onDismiss={dismissDemoBanner} />}
       <Header
         kicker="Overnight audit report"
         title="Here's what I found while you were away"
@@ -722,7 +764,7 @@ function AuditView({ findings, expandedId, setExpandedId, approveFix, dismiss, m
         }
         subtitle={
           <>
-            I ran a visual audit <strong style={{ color: T.ink }}>{SCENARIO.ran.date}, {SCENARIO.ran.start} – {SCENARIO.ran.end} UTC</strong> against design-token bundle <code style={{ fontFamily: MONO, fontSize: 12.5, padding: "1px 6px", background: T.surfaceMuted, borderRadius: 4 }}>{SCENARIO.scanned.tokenBundle}</code>. I scanned {SCENARIO.scanned.components.toLocaleString()} component instances across {SCENARIO.scanned.routes} routes. I produced <strong style={{ color: T.ink }}>{open.length + staged.length} findings</strong>: {counts.P0} P0, {counts.P1} P1, {counts.P2} P2.
+            I ran a visual audit <strong style={{ color: T.ink }}>{SCENARIO.ran.date}, {SCENARIO.ran.start} – {SCENARIO.ran.end} UTC</strong> against design-token bundle <code style={{ fontFamily: MONO, fontSize: 12.5, padding: "1px 6px", background: T.surfaceMuted, borderRadius: 4 }}>{SCENARIO.scanned.tokenBundle}</code>. I scanned {SCENARIO.scanned.components.toLocaleString()} component instances across {SCENARIO.scanned.routes} of {SCENARIO.scanned.routesTotal} routes. I produced <strong style={{ color: T.ink }}>{open.length + staged.length} findings</strong>: {counts.P0} P0, {counts.P1} P1, {counts.P2} P2.
           </>
         }
       />
@@ -744,6 +786,36 @@ function AuditView({ findings, expandedId, setExpandedId, approveFix, dismiss, m
           label="Legibility"
           body="The agent restates its operating constraint at the top of the report — not just in the Boundaries screen. Reinforcing the boundary inside the workflow, every session, is how trust compounds."
         />
+      </div>
+
+      {/* Scope + exemptions strip — what was and wasn't looked at */}
+      <div style={{ marginTop: 10, padding: "11px 16px", background: T.surfaceMuted, border: `1px solid ${T.line}`, borderRadius: 10, display: "flex", alignItems: "center", gap: 16, color: T.inkSoft, fontSize: 13, flexWrap: "wrap" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <Icon.eye width="14" height="14" style={{ color: T.inkMuted }} />
+          <span>
+            Couldn't reach <strong style={{ color: T.ink }}>{SCENARIO.skipped.length} route{SCENARIO.skipped.length === 1 ? "" : "s"}</strong> ({SCENARIO.skipped.map((s) => s.reason).join(", ")}) — those weren't audited.
+          </span>
+          <NoteMarker
+            show={showNotes}
+            label="Legibility — coverage edges"
+            body="The agent tells the user what it scanned AND what it couldn't get to. A silent gap is worse than a stated one — without this, a P0 hiding behind an auth-walled route never surfaces and the user thinks they have a clean bill of health."
+          />
+        </span>
+        <span style={{ width: 1, height: 16, background: T.line }} />
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <Icon.lock width="14" height="14" style={{ color: T.inkMuted }} />
+          <span>
+            <strong style={{ color: T.ink }}>{intentionalCount} allowed exception{intentionalCount === 1 ? "" : "s"}</strong> currently suppressed.
+          </span>
+          <button onClick={openExemptions} style={{ background: "transparent", border: "none", padding: 0, color: "#3730A3", fontWeight: 600, cursor: "pointer", fontSize: 13, fontFamily: FONT, textDecoration: "underline" }}>
+            View them
+          </button>
+          <NoteMarker
+            show={showNotes}
+            label="Suppression layer must be legible"
+            body="Allowed exceptions stop being re-flagged — useful, but they easily become invisible technical debt. Surfacing the count here, with a one-click view, keeps the suppression layer auditable in every session rather than buried in Archive."
+          />
+        </span>
       </div>
 
       {/* Findings */}
@@ -895,6 +967,16 @@ function FindingCard({ f, expanded, setExpanded, approveFix, dismiss, markIntent
         <SeverityBadge sev={f.severity} />
         <ChipTag>{f.category}</ChipTag>
         <ChipTag tone={f.confidence === "low" ? "warn" : "ok"}>{f.confidence === "low" ? "Low confidence" : "High confidence"}</ChipTag>
+        {f.reviewKind === "trivial" && (
+          <ChipTag>
+            <Icon.sparkle width="10" height="10" /> Trivial swap
+          </ChipTag>
+        )}
+        {f.reviewKind === "judgment" && (
+          <ChipTag tone="warn">
+            <Icon.eye width="10" height="10" /> Needs judgment
+          </ChipTag>
+        )}
         {f.status === "staged" && <ChipTag tone="accent">Staged draft</ChipTag>}
         {f.status === "reviewed" && <ChipTag>Reviewed</ChipTag>}
         <span style={{ flex: 1, marginLeft: 8, minWidth: 0 }}>
@@ -985,16 +1067,23 @@ function FindingCard({ f, expanded, setExpanded, approveFix, dismiss, markIntent
                   <button onClick={() => approveFix(f.id)} style={primaryBtn}>
                     <Icon.check width="14" height="14" /> Approve fix
                   </button>
-                  <button onClick={() => dismiss(f.id)} style={secondaryBtn}>Dismiss</button>
-                  <button onClick={() => markIntentional(f.id)} style={secondaryBtn}>Mark intentional</button>
+                  <button
+                    onClick={() => dismiss(f.id)}
+                    style={secondaryBtn}
+                    title="Removes from this report. The agent will re-check next run — if it still drifts, it comes back."
+                  >
+                    Not a real issue
+                  </button>
+                  <button
+                    onClick={() => markIntentional(f.id)}
+                    style={secondaryBtn}
+                    title="Permanently suppresses re-flagging unless the underlying token changes. Use only when the drift is deliberate."
+                  >
+                    Allowed exception
+                  </button>
                   <button onClick={() => decideLater(f.id)} style={ghostBtn}>
                     <Icon.eye width="14" height="14" /> Decide later
                   </button>
-                  {f.id === "F-04" && (
-                    <span style={{ marginLeft: "auto", fontSize: 12, color: T.warn, background: T.warnBg, border: `1px solid ${T.warnBorder}`, padding: "5px 10px", borderRadius: 6 }}>
-                      Try this: approve, then re-open from Staged drafts below
-                    </span>
-                  )}
                 </>
               )}
               {f.status === "reviewed" && (
@@ -1305,7 +1394,7 @@ function ArchiveView({ archive, restore, showNotes, filter, setFilter }) {
   const statusChip = (status) => {
     if (status === "released") return { label: "Released", tone: "ok" };
     if (status === "dismissed") return { label: "Dismissed", tone: "neutral" };
-    if (status === "intentional") return { label: "Marked intentional", tone: "accent" };
+    if (status === "intentional") return { label: "Allowed exception", tone: "accent" };
     return { label: status, tone: "neutral" };
   };
 
@@ -1319,11 +1408,11 @@ function ArchiveView({ archive, restore, showNotes, filter, setFilter }) {
 
       <div style={{ marginTop: 18, padding: "12px 16px", background: "#EEF2FF", border: `1px solid #C7D2FE`, borderRadius: 10, display: "flex", alignItems: "center", gap: 10, color: "#3730A3", fontSize: 13 }}>
         <Icon.info width="15" height="15" />
-        <span>Intentional findings won't be re-flagged. They will be re-checked automatically if the underlying token or standard changes <em style={{ color: "#4F46E5" }}>(future behavior)</em>.</span>
+        <span>Allowed exceptions won't be re-flagged. They will be re-checked automatically if the underlying token or standard changes <em style={{ color: "#4F46E5" }}>(future behavior)</em>.</span>
         <NoteMarker
           show={showNotes}
           label="Reversibility — the backup plan"
-          body="Dismiss and Mark intentional could be the dangerous actions: if the user is wrong, the finding disappears and the problem becomes invisible. Archive turns those into reversible acts. Nothing is a trapdoor."
+          body="'Not a real issue' and 'Allowed exception' could be the dangerous actions: if the user is wrong, the finding disappears and the problem becomes invisible. Archive turns those into reversible acts. Nothing is a trapdoor."
         />
       </div>
 
@@ -1334,7 +1423,7 @@ function ArchiveView({ archive, restore, showNotes, filter, setFilter }) {
             { id: "all", label: "All" },
             { id: "released", label: "Released" },
             { id: "dismissed", label: "Dismissed" },
-            { id: "intentional", label: "Intentional" },
+            { id: "intentional", label: "Allowed exception" },
           ].map((opt) => {
             const active = filter === opt.id;
             const c = counts[opt.id];
@@ -1403,11 +1492,11 @@ function DismissConfirmModal({ id, finding, onCancel, onConfirm }) {
         <div style={{ padding: "20px 24px", borderBottom: `1px solid ${T.lineSoft}` }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: T.p0, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6 }}>
             <Icon.alert width="13" height="13" />
-            Dismissing a P0 finding
+            Marking a P0 as "Not a real issue"
           </div>
           <h3 style={{ fontSize: 18, fontWeight: 700, margin: "10px 0 0" }}>Are you sure this isn't a real problem?</h3>
           <p style={{ fontSize: 13.5, color: T.inkSoft, marginTop: 10, lineHeight: 1.6, marginBottom: 0 }}>
-            P0 findings break accessibility or compliance commitments. Dismissing one removes it from your audit report. You can restore it from Archive, but no one will see it in the meantime.
+            P0 findings break accessibility or compliance commitments. Removing it takes it out of this report. The agent <strong>will re-check on the next run</strong> — if it still drifts, it comes back. Use "Allowed exception" if you want to suppress it permanently.
           </p>
           <div style={{ marginTop: 12, padding: "10px 12px", background: T.surfaceMuted, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13, color: T.inkSoft }}>
             <strong style={{ color: T.ink }}>{finding.title}</strong><br />
@@ -1424,7 +1513,7 @@ function DismissConfirmModal({ id, finding, onCancel, onConfirm }) {
           />
           <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button onClick={onCancel} style={secondaryBtn}>Keep it in the report</button>
-            <button onClick={() => onConfirm(reason || null)} style={{ ...primaryBtn, background: T.p0 }}>Yes, dismiss this P0</button>
+            <button onClick={() => onConfirm(reason || null)} style={{ ...primaryBtn, background: T.p0 }}>Yes, remove this P0</button>
           </div>
         </div>
       </div>
@@ -1435,9 +1524,13 @@ function DismissConfirmModal({ id, finding, onCancel, onConfirm }) {
 // --- Release confirmation modal --------------------------------------------
 function ReleaseConfirmModal({ stagedFindings, prNumber, onCancel, onConfirm }) {
   const count = stagedFindings.length;
+  const defaultBody = buildPrBody(stagedFindings, prNumber);
+  const [body, setBody] = useState(defaultBody);
+  const [title, setTitle] = useState(`design-system: ${count} drift fix${count === 1 ? "" : "es"} from overnight audit`);
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, fontFamily: FONT }}>
-      <div style={{ width: 520, background: T.surface, borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", overflow: "hidden" }}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, fontFamily: FONT, padding: 20, overflowY: "auto" }}>
+      <div style={{ width: 640, background: T.surface, borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", overflow: "hidden", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
         <div style={{ padding: "20px 24px", borderBottom: `1px solid ${T.lineSoft}` }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: T.ok, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6 }}>
             <Icon.sparkle width="13" height="13" />
@@ -1447,25 +1540,34 @@ function ReleaseConfirmModal({ stagedFindings, prNumber, onCancel, onConfirm }) 
             Release {count} fix{count === 1 ? "" : "es"} as pull request <span style={{ fontFamily: MONO, color: T.ok }}>{prNumber}</span>?
           </h3>
           <p style={{ fontSize: 13.5, color: T.inkSoft, marginTop: 10, lineHeight: 1.6, marginBottom: 0 }}>
-            A pull request will be opened for the engineering team. They'll review and merge it on their schedule. Until they merge and deploy, nothing is applied to the live product — and the released fixes will move to your Archive for reference.
+            This is the handoff to engineering. Review and edit the PR title and body below — what you write here is what they'll read. Nothing is applied to the live product until they merge.
           </p>
         </div>
-        <div style={{ padding: "16px 24px 8px" }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: T.inkMuted, marginBottom: 8 }}>Included in this release</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto" }}>
-            {stagedFindings.map((f) => (
-              <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: T.surfaceMuted, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13 }}>
-                <SeverityBadge sev={f.severity} />
-                <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.title}</span>
-                <span style={{ fontSize: 11, color: T.inkFaint, fontFamily: MONO }}>{f.id}</span>
-              </div>
-            ))}
+
+        <div style={{ padding: "16px 24px", overflowY: "auto", flex: 1 }}>
+          <label style={{ fontSize: 12.5, fontWeight: 600, color: T.inkMuted, display: "block", marginBottom: 6 }}>Pull request title</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            style={{ width: "100%", padding: "9px 12px", border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13.5, fontFamily: FONT, color: T.ink, boxSizing: "border-box" }}
+          />
+
+          <label style={{ fontSize: 12.5, fontWeight: 600, color: T.inkMuted, display: "block", margin: "14px 0 6px" }}>Pull request body (Markdown)</label>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            style={{ width: "100%", minHeight: 220, padding: "10px 12px", border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 12.5, fontFamily: MONO, lineHeight: 1.55, color: T.ink, resize: "vertical", boxSizing: "border-box", background: T.surfaceMuted }}
+          />
+
+          <div style={{ marginTop: 12, fontSize: 12, color: T.inkMuted, lineHeight: 1.55 }}>
+            Engineering will see the body above on the PR. Edit anything that needs more context for them — risk notes, deploy timing, who approved what.
           </div>
         </div>
-        <div style={{ padding: "12px 24px 20px", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+
+        <div style={{ padding: "12px 24px 20px", borderTop: `1px solid ${T.lineSoft}`, display: "flex", justifyContent: "flex-end", gap: 10 }}>
           <button onClick={onCancel} style={secondaryBtn}>Not yet — keep them staged</button>
           <button onClick={onConfirm} style={primaryBtn}>
-            <Icon.sparkle width="14" height="14" /> Yes, release {count} fix{count === 1 ? "" : "es"}
+            <Icon.sparkle width="14" height="14" /> Yes, open pull request
           </button>
         </div>
       </div>
@@ -1473,6 +1575,142 @@ function ReleaseConfirmModal({ stagedFindings, prNumber, onCancel, onConfirm }) 
   );
 }
 
+function buildPrBody(staged, prNumber) {
+  const lines = [];
+  lines.push(`## Summary`);
+  lines.push(``);
+  lines.push(`Drift Sentinel found ${staged.length} design-system drift${staged.length === 1 ? "" : "s"} in the overnight audit and staged ${staged.length === 1 ? "a fix" : "fixes"} for review. All ${staged.length === 1 ? "has" : "have"} been approved by design. This PR applies the staged token swaps.`);
+  lines.push(``);
+  lines.push(`## Changes`);
+  lines.push(``);
+  staged.forEach((f) => {
+    lines.push(`- **[${f.severity}] ${f.title}**`);
+    lines.push(`  - File: \`${f.sourcePath}\``);
+    lines.push(`  - Observed: ${f.observed}`);
+    lines.push(`  - Expected: ${f.expected}`);
+    lines.push(`  - Fix: ${f.fix}`);
+    lines.push(``);
+  });
+  lines.push(`## Notes for review`);
+  lines.push(``);
+  lines.push(`- No behavior changes — visual / token swaps only.`);
+  lines.push(`- Reference: Drift Sentinel audit ${prNumber}`);
+  return lines.join("\n");
+}
+
+
+// --- Allowed exception confirmation modal ----------------------------------
+function IntentionalConfirmModal({ finding, onCancel, onConfirm }) {
+  const [reason, setReason] = useState("");
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, fontFamily: FONT }}>
+      <div style={{ width: 500, background: T.surface, borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", overflow: "hidden" }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${T.lineSoft}` }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "#3730A3", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6 }}>
+            <Icon.lock width="13" height="13" />
+            Marking as allowed exception
+          </div>
+          <h3 style={{ fontSize: 18, fontWeight: 700, margin: "10px 0 0" }}>This will suppress re-flagging.</h3>
+          <p style={{ fontSize: 13.5, color: T.inkSoft, marginTop: 10, lineHeight: 1.6, marginBottom: 0 }}>
+            Allowed exceptions <strong>aren't re-checked on future runs</strong> unless the underlying token or standard changes. Use this only when the drift is deliberate — e.g., partner-mandated branding, a documented legacy area, or an approved one-off. If you're not sure, choose "Not a real issue" instead — the agent will re-evaluate next run.
+          </p>
+          <div style={{ marginTop: 12, padding: "10px 12px", background: T.surfaceMuted, border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13, color: T.inkSoft }}>
+            <strong style={{ color: T.ink }}>{finding.title}</strong><br />
+            <span style={{ color: T.inkMuted, fontSize: 12.5 }}>{finding.location}</span>
+          </div>
+        </div>
+        <div style={{ padding: "16px 24px 20px" }}>
+          <label style={{ fontSize: 12.5, fontWeight: 600, color: T.inkMuted, display: "block", marginBottom: 6 }}>Why is this exception allowed? (helps your team and your future self)</label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Acme is a partner — their brand orange is required on this banner per contract."
+            style={{ width: "100%", minHeight: 80, padding: "10px 12px", border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13.5, fontFamily: FONT, color: T.ink, resize: "vertical", boxSizing: "border-box" }}
+          />
+          <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <button onClick={onCancel} style={secondaryBtn}>Cancel</button>
+            <button onClick={() => onConfirm(reason || null)} style={{ ...primaryBtn, background: "#3730A3" }}>
+              <Icon.lock width="13" height="13" /> Confirm — allow this exception
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Exemptions inventory modal --------------------------------------------
+function ExemptionsModal({ exemptions, archivedIntentional, onClose }) {
+  const all = [
+    ...archivedIntentional.map((f) => ({ id: f.id, title: f.title, category: f.category, markedAt: f.archivedAt, reason: f.dismissReason, fresh: true })),
+    ...exemptions.map((e) => ({ ...e, fresh: false })),
+  ];
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, fontFamily: FONT, padding: 20 }}>
+      <div style={{ width: 640, background: T.surface, borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", overflow: "hidden", maxHeight: "85vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${T.lineSoft}` }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "#3730A3", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6 }}>
+            <Icon.lock width="13" height="13" />
+            Active allowed exceptions
+          </div>
+          <h3 style={{ fontSize: 18, fontWeight: 700, margin: "10px 0 0" }}>{all.length} finding{all.length === 1 ? "" : "s"} the agent has been told to ignore</h3>
+          <p style={{ fontSize: 13.5, color: T.inkSoft, marginTop: 10, lineHeight: 1.6, marginBottom: 0 }}>
+            Each of these was once a finding that you marked as an allowed exception. The agent doesn't re-flag them — unless the underlying token or standard changes. You can revoke an exception any time from the Archive.
+          </p>
+        </div>
+        <div style={{ padding: "12px 24px 18px", overflowY: "auto", flex: 1 }}>
+          {all.length === 0 && (
+            <div style={{ padding: "30px 16px", background: T.surfaceMuted, border: `1px dashed ${T.line}`, borderRadius: 10, textAlign: "center", color: T.inkMuted, fontSize: 13.5 }}>
+              No allowed exceptions on file.
+            </div>
+          )}
+          {all.map((e) => (
+            <div key={e.id} style={{ padding: "12px 14px", background: T.surface, border: `1px solid ${T.line}`, borderRadius: 10, marginTop: 8, display: "flex", alignItems: "flex-start", gap: 12 }}>
+              <ChipTag>{e.category}</ChipTag>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: T.ink }}>{e.title}</div>
+                <div style={{ fontSize: 12.5, color: T.inkMuted, marginTop: 3 }}>
+                  Marked {e.markedAt}
+                  {e.fresh && <span style={{ marginLeft: 8, color: T.ok }}>· just now</span>}
+                </div>
+                {e.reason && <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 6, fontStyle: "italic" }}>"{e.reason}"</div>}
+              </div>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: T.inkFaint }}>{e.id}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: "12px 24px 18px", borderTop: `1px solid ${T.lineSoft}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: T.inkMuted }}>To revoke an exception, open Archive and Restore.</span>
+          <button onClick={onClose} style={secondaryBtn}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Demo scenario banner --------------------------------------------------
+function DemoBanner({ onDismiss }) {
+  return (
+    <div style={{ marginBottom: 24, padding: "14px 16px 14px 18px", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 12, display: "flex", alignItems: "flex-start", gap: 14, color: "#312E81" }}>
+      <div style={{ width: 28, height: 28, borderRadius: 8, background: "#4F46E5", color: "white", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+        <Icon.info width="15" height="15" />
+      </div>
+      <div style={{ flex: 1, fontSize: 13.5, lineHeight: 1.6 }}>
+        <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 13 }}>Demo scenario — read me first</div>
+        <div>
+          You're seeing the morning after one overnight audit. Four findings are loaded. To walk through the trust architecture, try this sequence:
+          <ol style={{ margin: "8px 0 0", paddingLeft: 20 }}>
+            <li>Expand any finding to see the visual evidence and suggested fix.</li>
+            <li>Approve <strong>F-04</strong> (the P2 banner), then re-open it from <em>Staged drafts</em> below — the second-look prompt appears, because the agent flagged it as low confidence.</li>
+            <li>Try <em>Allowed exception</em> on a finding to see the suppression confirmation, or <em>Release</em> staged drafts to see the PR handoff.</li>
+            <li>Toggle <em>Design notes</em> in the top bar for inline commentary on each decision.</li>
+          </ol>
+        </div>
+      </div>
+      <button onClick={onDismiss} style={{ background: "transparent", border: "none", color: "#4F46E5", cursor: "pointer", padding: 4, fontSize: 18, lineHeight: 1, flexShrink: 0 }} aria-label="Dismiss demo banner">×</button>
+    </div>
+  );
+}
 
 // --- Toast -----------------------------------------------------------------
 function Toast({ toast, pause, resume, dismiss }) {
