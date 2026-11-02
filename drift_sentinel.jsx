@@ -793,7 +793,7 @@ function AuditView({ findings, archive, exemptions, expandedId, setExpandedId, a
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <Icon.eye width="14" height="14" style={{ color: T.inkMuted }} />
           <span>
-            Couldn't reach <strong style={{ color: T.ink }}>{SCENARIO.skipped.length} route{SCENARIO.skipped.length === 1 ? "" : "s"}</strong> ({SCENARIO.skipped.map((s) => s.reason).join(", ")}) — those weren't audited.
+            Couldn't reach <strong style={{ color: T.ink }}>{SCENARIO.skipped.length} route{SCENARIO.skipped.length === 1 ? "" : "s"}</strong> ({[...new Set(SCENARIO.skipped.map((s) => s.reason))].join(", ")}) — those weren't audited.
           </span>
           <NoteMarker
             show={showNotes}
@@ -1602,6 +1602,8 @@ function buildPrBody(staged, prNumber) {
 // --- Allowed exception confirmation modal ----------------------------------
 function IntentionalConfirmModal({ finding, onCancel, onConfirm }) {
   const [reason, setReason] = useState("");
+  // Reason is required: suppression is the most dangerous action, so it has to leave a record.
+  const hasReason = reason.trim().length > 0;
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, fontFamily: FONT }}>
       <div style={{ width: 500, background: T.surface, borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", overflow: "hidden" }}>
@@ -1620,16 +1622,26 @@ function IntentionalConfirmModal({ finding, onCancel, onConfirm }) {
           </div>
         </div>
         <div style={{ padding: "16px 24px 20px" }}>
-          <label style={{ fontSize: 12.5, fontWeight: 600, color: T.inkMuted, display: "block", marginBottom: 6 }}>Why is this exception allowed? (helps your team and your future self)</label>
+          <label htmlFor="exception-reason" style={{ fontSize: 12.5, fontWeight: 600, color: T.inkMuted, display: "block", marginBottom: 6 }}>Why is this exception allowed? <span style={{ color: T.ink }}>(required)</span></label>
           <textarea
+            id="exception-reason"
+            aria-required="true"
+            aria-describedby="exception-reason-help"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="e.g. Acme is a partner — their brand orange is required on this banner per contract."
             style={{ width: "100%", minHeight: 80, padding: "10px 12px", border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 13.5, fontFamily: FONT, color: T.ink, resize: "vertical", boxSizing: "border-box" }}
           />
+          <div id="exception-reason-help" style={{ fontSize: 12, color: T.inkMuted, marginTop: 6 }}>
+            Your team will see this reason in the exceptions list. It's how your future self knows why this drift was allowed.
+          </div>
           <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button onClick={onCancel} style={secondaryBtn}>Cancel</button>
-            <button onClick={() => onConfirm(reason || null)} style={{ ...primaryBtn, background: "#3730A3" }}>
+            <button
+              onClick={() => hasReason && onConfirm(reason.trim())}
+              disabled={!hasReason}
+              style={{ ...primaryBtn, background: "#3730A3", opacity: hasReason ? 1 : 0.45, cursor: hasReason ? "pointer" : "not-allowed" }}
+            >
               <Icon.lock width="13" height="13" /> Confirm — allow this exception
             </button>
           </div>
@@ -1671,7 +1683,7 @@ function ExemptionsModal({ exemptions, archivedIntentional, onClose }) {
                 <div style={{ fontSize: 14, fontWeight: 600, color: T.ink }}>{e.title}</div>
                 <div style={{ fontSize: 12.5, color: T.inkMuted, marginTop: 3 }}>
                   Marked {e.markedAt}
-                  {e.fresh && <span style={{ marginLeft: 8, color: T.ok }}>· just now</span>}
+                  {e.fresh && <span style={{ marginLeft: 8, color: T.ok }}>· New</span>}
                 </div>
                 {e.reason && <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 6, fontStyle: "italic" }}>"{e.reason}"</div>}
               </div>
